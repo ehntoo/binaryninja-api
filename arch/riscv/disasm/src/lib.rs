@@ -1721,6 +1721,8 @@ impl Instr16 {
         let upper = self.extract_bits(10, 3) << 3;
 
         let res = match size {
+            1 => self.extract_bits(10, 2) << 3 | self.extract_bits(5, 2) << 1 | self.extract_bits(12, 1),
+            2 => upper | self.extract_bits(5, 2) << 1,
             4 => upper | self.extract_bits(6, 1) << 2 | self.extract_bits(5, 1) << 6,
             8 => upper | self.extract_bits(5, 2) << 6,
             _ => unimplemented!(),
@@ -2337,6 +2339,7 @@ pub trait RiscVDisassembler: Sized + Copy + Clone {
     type MulDivExtension: StandardExtension;
     type AtomicExtension: StandardExtension;
     type CompressedExtension: StandardExtension;
+    type WCHExtendedCompressedExtension: StandardExtension;
 
     fn decode(addr: u64, bytes: &[u8]) -> DisResult<Instr<Self>> {
         use Error::*;
@@ -2427,6 +2430,14 @@ pub trait RiscVDisassembler: Sized + Copy + Clone {
                     }
 
                     //0b001_00 if int_width == 16 => unimplemented!("LQ"),
+                    0b001_00 if Self::WCHExtendedCompressedExtension::supported() => {
+                        // c.lbu
+                        let rd = IntReg::new(8 + inst.extract_bits(2, 3) as u32);
+                        let rs1 = IntReg::new(8 + inst.extract_bits(7, 3) as u32);
+
+                        let imm = inst.mem_imm(1);
+                        Op::Load(LoadTypeInst::new(1, true, rd, rs1, imm)?)
+                    }
                     0b001_00 if float_width >= 8 => {
                         // FLD
                         let rd = FloatReg::new(8 + inst.extract_bits(2, 3) as u32);
@@ -2457,6 +2468,14 @@ pub trait RiscVDisassembler: Sized + Copy + Clone {
                         ))
                     }
                     //0b001_10 if int_width == 16 => unimplemented!("LQSP"),
+                    0b001_10 if Self::WCHExtendedCompressedExtension::supported() => {
+                        // c.lhu
+                        let rd = IntReg::new(8 + inst.extract_bits(2, 3) as u32);
+                        let rs1 = IntReg::new(8 + inst.extract_bits(7, 3) as u32);
+
+                        let imm = inst.mem_imm(2);
+                        Op::Load(LoadTypeInst::new(2, true, rd, rs1, imm)?)
+                    }
                     0b001_10 if float_width >= 8 => {
                         // FLDSP
                         let rd = FloatReg::new(inst.extract_bits(7, 5) as u32);
@@ -2670,7 +2689,34 @@ pub trait RiscVDisassembler: Sized + Copy + Clone {
                         }
                     }
 
+                    // This is reserved space in the risc-v spec, but WCH hijacked it
+                    0b100_11 if Self::WCHExtendedCompressedExtension::supported() => {
+                        let halfword = inst.extract_bits(5, 1);
+                        let op = inst.extract_bits(6, 1);
+                        let rd_rs2 = IntReg::new(8 + inst.extract_bits(2, 3) as u32);
+
+                        let imm = if halfword == 0 {
+                            inst.extract_bits(7, 4)
+                        } else {
+                            inst.extract_bits(7, 1) << 4 | inst.extract_bits(8, 3) << 1
+                        } as i32;
+
+                        if op == 0 {
+                            Op::Load(LoadTypeInst::new(halfword as usize + 1, true, rd_rs2, IntReg::new(2), imm)?)
+                        } else {
+                            Op::Store(StoreTypeInst::new(halfword as usize + 1, rd_rs2, IntReg::new(2), imm)?)
+                        }
+                    }
+
                     //0b101_00 if int_width == 16 => unimplemented!("SQ"),
+                    0b101_00 if Self::WCHExtendedCompressedExtension::supported() => {
+                        // c.sb
+                        let rs2 = IntReg::new(8 + inst.extract_bits(2, 3) as u32);
+                        let rs1 = IntReg::new(8 + inst.extract_bits(7, 3) as u32);
+
+                        let imm = inst.mem_imm(1);
+                        Op::Store(StoreTypeInst::new(1, rs2, rs1, imm)?)
+                    }
                     0b101_00 if float_width >= 8 => {
                         // FSD
                         let rd = FloatReg::new(8 + inst.extract_bits(2, 3) as u32);
@@ -2684,6 +2730,14 @@ pub trait RiscVDisassembler: Sized + Copy + Clone {
                         Op::Jal(JTypeInst::new(IntReg::new(0), inst.cj_imm())?)
                     }
                     //0b101_10 if int_width == 16 => unimplemented!("SQSP"),
+                    0b101_10 if Self::WCHExtendedCompressedExtension::supported() => {
+                        // c.sh
+                        let rs2 = IntReg::new(8 + inst.extract_bits(2, 3) as u32);
+                        let rs1 = IntReg::new(8 + inst.extract_bits(7, 3) as u32);
+
+                        let imm = inst.mem_imm(2);
+                        Op::Store(StoreTypeInst::new(2, rs2, rs1, imm)?)
+                    }
                     0b101_10 if float_width >= 8 => {
                         // FSDSP
                         let rd = FloatReg::new(inst.extract_bits(7, 5) as u32);
@@ -3183,4 +3237,15 @@ impl<RF: RegFile> RiscVDisassembler for RiscVIMACDisassembler<RF> {
     type MulDivExtension = ExtensionSupported;
     type AtomicExtension = ExtensionSupported;
     type CompressedExtension = ExtensionSupported;
+    type WCHExtendedCompressedExtension = ExtensionSupported;
+}
+
+#[derive(Copy, Clone, Debug)]
+pub struct RiscVIMACXWDisassembler<RF: RegFile>(PhantomData<RF>);
+impl<RF: RegFile> RiscVDisassembler for RiscVIMACXWDisassembler<RF> {
+    type RegFile = RF;
+    type MulDivExtension = ExtensionSupported;
+    type AtomicExtension = ExtensionSupported;
+    type CompressedExtension = ExtensionSupported;
+    type WCHExtendedCompressedExtension = ExtensionSupported;
 }

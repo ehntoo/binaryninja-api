@@ -1326,7 +1326,7 @@ impl<D: 'static + RiscVDisassembler + Send + Sync> architecture::Architecture fo
                     Lifter::<Self>::NO_INPUTS,
                 )
                 .append(),
-            Op::Fence(i) => il
+            Op::Fence(i) | Op::FenceI(i) => il
                 .intrinsic(
                     Lifter::<Self>::NO_OUTPUTS,
                     Intrinsic::Fence,
