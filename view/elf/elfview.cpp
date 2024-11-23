@@ -1201,9 +1201,46 @@ bool ElfView::Init()
 		combinedSymbolTable.insert(combinedSymbolTable.end(), dynamicSymbolTable.begin() + 1, dynamicSymbolTable.end());
 	if (auxSymbolTable.size() > 1)
 		combinedSymbolTable.insert(combinedSymbolTable.end(), auxSymbolTable.begin() + 1, auxSymbolTable.end());
+
+	// Walk the symbol table a first time to collect the information we need to create a .common section
+	size_t commonSectionSize = 0;
 	for (auto entry = combinedSymbolTable.begin(); entry != combinedSymbolTable.end(); entry++)
 	{
-		if (m_objectFile)
+		if (entry->section == ELF_SHN_COMMON)
+		{
+			// account for required alignment, stored in entry->value;
+			auto alignedExistingSize = commonSectionSize + (entry->value - 1);
+			alignedExistingSize &= ~(entry->value - 1);
+			commonSectionSize = alignedExistingSize + entry->size;
+		}
+	}
+
+	size_t commonSegmentStartAddr = 0;
+	if (commonSectionSize > 0) {
+		// Find the end of the existing segment definitions to stick the SHN_COMMON segment
+		for (auto& i : GetSegments()) {
+			if (commonSegmentStartAddr < i->GetEnd()) {
+				commonSegmentStartAddr = i->GetEnd();
+			}
+		}
+		// Align the common segment to 16 bytes
+		commonSegmentStartAddr = (commonSegmentStartAddr + 0xf) & (~0xf);
+		AddAutoSegment(commonSegmentStartAddr, commonSectionSize, 0, 0, SegmentReadable | SegmentWritable);
+		AddAutoSection(".common", commonSegmentStartAddr, commonSectionSize, ReadWriteDataSectionSemantics);
+	}
+
+	size_t commonSegmentOffset = 0;
+	for (auto entry = combinedSymbolTable.begin(); entry != combinedSymbolTable.end(); entry++)
+	{
+		if (entry->section == ELF_SHN_COMMON)
+		{
+			auto alignedExistingOffset = commonSegmentOffset + (entry->value - 1);
+			alignedExistingOffset &= ~(entry->value - 1);
+			DefineElfSymbol(DataSymbol, entry->name, commonSegmentStartAddr+alignedExistingOffset, false, entry->binding, entry->size);
+			commonSegmentOffset = alignedExistingOffset + entry->size;
+			continue;
+		}
+		else if (m_objectFile)
 		{
 			if (entry->section >= m_elfSections.size())
 				continue;
