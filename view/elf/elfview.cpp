@@ -1215,12 +1215,13 @@ bool ElfView::Init()
 		}
 	}
 
+	// If the common section exists create a mock segment/section.
 	size_t commonSegmentStartAddr = 0;
 	if (commonSectionSize > 0) {
 		// Find the end of the existing segment definitions to stick the SHN_COMMON segment
-		for (auto& i : GetSegments()) {
-			if (commonSegmentStartAddr < i->GetEnd()) {
-				commonSegmentStartAddr = i->GetEnd();
+		for (const auto& segment : GetSegments()) {
+			if (commonSegmentStartAddr < segment->GetEnd()) {
+				commonSegmentStartAddr = segment->GetEnd();
 			}
 		}
 		// Align the common segment to 16 bytes
@@ -1234,13 +1235,15 @@ bool ElfView::Init()
 	{
 		if (entry->section == ELF_SHN_COMMON)
 		{
+			// Common symbols are special as their entry value holds the alignment of the entry instead of an offset.
 			auto alignedExistingOffset = commonSegmentOffset + (entry->value - 1);
 			alignedExistingOffset &= ~(entry->value - 1);
-			DefineElfSymbol(DataSymbol, entry->name, commonSegmentStartAddr+alignedExistingOffset, false, entry->binding, entry->size);
+			DefineElfSymbol(DataSymbol, entry->name, commonSegmentStartAddr + alignedExistingOffset, false, entry->binding, entry->size);
 			commonSegmentOffset = alignedExistingOffset + entry->size;
 			continue;
 		}
-		else if (m_objectFile)
+
+		if (m_objectFile)
 		{
 			if (entry->section >= m_elfSections.size())
 				continue;
