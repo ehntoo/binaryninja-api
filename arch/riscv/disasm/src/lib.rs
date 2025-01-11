@@ -37,6 +37,7 @@ pub enum Op<D: RiscVDisassembler> {
     // MISC-MEM
     Fence(ITypeIntInst<D>),
     FenceI(ITypeIntInst<D>),
+    Mcpy(WCHRTypeIntInst<D>),
 
     // OP-IMM
     AddI(ITypeIntInst<D>),
@@ -188,6 +189,48 @@ pub enum Op<D: RiscVDisassembler> {
     FmvToInt(FpMvToIntInst<D>),
     FmvFromInt(FpMvFromIntInst<D>),
     Fclass(FpClassInst<D>),
+
+    //
+    // Zba
+    //
+    // AddUW(RTypeIntInst<D>),
+    Sh1Add(RTypeIntInst<D>),
+    // Sh1AddUW(RTypeIntInst<D>),
+    Sh2Add(RTypeIntInst<D>),
+    // Sh2AddUW(RTypeIntInst<D>),
+    Sh3Add(RTypeIntInst<D>),
+    // Sh3AddUW(RTypeIntInst<D>),
+    // SlliUW(RTypeIntInst<D>),
+    // ZextW(RTypeIntInst<D>),
+
+    //
+    // Zbb
+    //
+    Max(RTypeIntInst<D>),
+    Maxu(RTypeIntInst<D>),
+    Min(RTypeIntInst<D>),
+    Minu(RTypeIntInst<D>),
+    ZextH(RTypeIntInst<D>),
+    Andn(RTypeIntInst<D>),
+
+    //
+    // Zbs
+    //
+    Bset(RTypeIntInst<D>),
+    Bext(RTypeIntInst<D>),
+    Bclr(RTypeIntInst<D>),
+    Binv(RTypeIntInst<D>),
+
+    BsetI(ITypeIntInst<D>),
+    BextI(ITypeIntInst<D>),
+    BclrI(ITypeIntInst<D>),
+    BinvI(ITypeIntInst<D>),
+
+    Clz(ITypeIntInst<D>),
+    Ctz(ITypeIntInst<D>),
+    Cpop(ITypeIntInst<D>),
+    SextB(ITypeIntInst<D>),
+    SextH(ITypeIntInst<D>),
 }
 
 pub trait Register {
@@ -1698,6 +1741,59 @@ impl<D: RiscVDisassembler> FpClassInst<D> {
 }
 
 #[derive(Copy, Clone, Debug)]
+pub struct WCHRTypeInst<Rd, Rs1, Rs2>
+where
+    Rd: Register,
+    Rs1: Register,
+    Rs2: Register,
+{
+    inst: Instr32,
+    _rd: PhantomData<Rd>,
+    _rs1: PhantomData<Rs1>,
+    _rs2: PhantomData<Rs2>,
+}
+
+pub type WCHRTypeIntInst<D> = WCHRTypeInst<IntReg<D>, IntReg<D>, IntReg<D>>;
+
+impl<Rd, Rs1, Rs2> WCHRTypeInst<Rd, Rs1, Rs2>
+where
+    Rd: Register,
+    Rs1: Register,
+    Rs2: Register,
+{
+    #[inline(always)]
+    fn new(inst: Instr32) -> DisResult<Self> {
+        let ret = Self {
+            inst,
+            _rd: PhantomData,
+            _rs1: PhantomData,
+            _rs2: PhantomData,
+        };
+
+        if !ret.rd().valid() || !ret.rs1().valid() || !ret.rs2().valid() {
+            return Err(Error::BadRegister);
+        }
+
+        Ok(ret)
+    }
+
+    #[inline(always)]
+    pub fn rd(&self) -> Rd {
+        Rd::new((self.inst.0 >> 27) & 0x1f)
+    }
+
+    #[inline(always)]
+    pub fn rs1(&self) -> Rs1 {
+        Rs1::new(self.inst.rs1())
+    }
+
+    #[inline(always)]
+    pub fn rs2(&self) -> Rs2 {
+        Rs2::new(self.inst.rs2())
+    }
+}
+
+#[derive(Copy, Clone, Debug)]
 pub struct Instr16(u16);
 impl Instr16 {
     #[inline(always)]
@@ -1846,7 +1942,19 @@ impl<D: RiscVDisassembler> Instr<D> {
                 | Op::DivW(ref r)
                 | Op::DivUW(ref r)
                 | Op::RemW(ref r)
-                | Op::RemUW(ref r) => {
+                | Op::RemUW(ref r)
+                | Op::Sh1Add(ref r)
+                | Op::Sh2Add(ref r)
+                | Op::Sh3Add(ref r)
+                | Op::Max(ref r)
+                | Op::Maxu(ref r)
+                | Op::Min(ref r)
+                | Op::Minu(ref r)
+                | Op::Andn(ref r)
+                | Op::Bset(ref r)
+                | Op::Bext(ref r)
+                | Op::Bclr(ref r)
+                | Op::Binv(ref r) => {
                     ops.push(Operand::R(r.rd()));
                     ops.push(Operand::R(r.rs1()));
                     ops.push(Operand::R(r.rs2()));
@@ -1981,6 +2089,40 @@ impl<D: RiscVDisassembler> Instr<D> {
                     ops.push(Operand::R(f.rd()));
                     ops.push(Operand::F(f.rs1()));
                 }
+                Op::Mcpy(ref r) => {
+                    ops.push(Operand::R(r.rs1()));
+                    ops.push(Operand::R(r.rs2()));
+                    ops.push(Operand::R(r.rd()));
+                }
+                // Op::AddUW(rtype_inst) => todo!(),
+                // Op::Sh1AddUW(rtype_inst) => todo!(),
+                // Op::Sh2AddUW(rtype_inst) => todo!(),
+
+                // Op::Sh3AddUW(rtype_inst) => todo!(),
+                // Op::SlliUW(rtype_inst) => todo!(),
+                // Op::ZextW(rtype_inst) => todo!(),
+                // Op::ZextH(rtype_inst) => todo!(),
+                Op::ZextH(ref r) => {
+                    ops.push(Operand::R(r.rs1()));
+                    ops.push(Operand::R(r.rd()));
+                }
+                Op::BsetI(ref i)
+                | Op::BextI(ref i)
+                | Op::BclrI(ref i)
+                | Op::BinvI(ref i) => {
+                    ops.push(Operand::R(i.rd()));
+                    ops.push(Operand::R(i.rs1()));
+                    // TODO: the 0x3f masking here should really move into the decode.
+                    ops.push(Operand::I(i.imm() & 0x3f));
+                }
+                Op::Clz(ref i)
+                | Op::Ctz(ref i)
+                | Op::Cpop(ref i)
+                | Op::SextB(ref i)
+                | Op::SextH(ref i) => {
+                    ops.push(Operand::R(i.rd()));
+                    ops.push(Operand::R(i.rs1()));
+                }
             },
         }
 
@@ -1996,6 +2138,7 @@ impl<'a, D: RiscVDisassembler + 'a> Mnem<'a, D> {
                 Op::Load(..) => "l",
                 Op::Fence(..) => "fence",
                 Op::FenceI(..) => "fence.i",
+                Op::Mcpy(..) => "mcpy",
 
                 Op::AddI(..) => "addi",
                 Op::SltI(..) => "slti",
@@ -2115,6 +2258,35 @@ impl<'a, D: RiscVDisassembler + 'a> Mnem<'a, D> {
                 Op::Fcvt(..) | Op::FcvtToInt(..) | Op::FcvtFromInt(..) => "fcvt",
                 Op::FmvToInt(..) | Op::FmvFromInt(..) => "fmv",
                 Op::Fclass(..) => "fclass",
+                // Op::AddUW(rtype_inst) => todo!(),
+                Op::Sh1Add(..) => "sh1add",
+                // Op::Sh1AddUW(rtype_inst) => todo!(),
+                Op::Sh2Add(..) => "sh2add",
+                // Op::Sh2AddUW(rtype_inst) => todo!(),
+                Op::Sh3Add(..) => "sh3add",
+                // Op::Sh3AddUW(rtype_inst) => todo!(),
+                // Op::SlliUW(rtype_inst) => todo!(),
+                // Op::ZextW(rtype_inst) => todo!(),
+                // Op::ZextH(rtype_inst) => todo!(),
+                Op::ZextH(..) => "zexth",
+                Op::Max(..) => "max",
+                Op::Maxu(..) => "maxu",
+                Op::Min(..) => "min",
+                Op::Minu(..) => "minu",
+                Op::Andn(..) => "andn",
+                Op::Bset(..) => "bset",
+                Op::BsetI(..) => "bseti",
+                Op::Bext(..) => "bext",
+                Op::BextI(..) => "bexti",
+                Op::Bclr(..) => "bclr",
+                Op::BclrI(..) => "bclri",
+                Op::Binv(..) => "binv",
+                Op::BinvI(..) => "binvi",
+                Op::Clz(..) => "clz",
+                Op::Ctz(..) => "ctz",
+                Op::Cpop(..) => "cpop",
+                Op::SextB(..) => "sextb",
+                Op::SextH(..) => "sexth",
             },
         }
     }
@@ -2339,7 +2511,13 @@ pub trait RiscVDisassembler: Sized + Copy + Clone {
     type MulDivExtension: StandardExtension;
     type AtomicExtension: StandardExtension;
     type CompressedExtension: StandardExtension;
+    type ZbaExtension: StandardExtension;
+    type ZbbExtension: StandardExtension;
+    type ZbcExtension: StandardExtension;
+    type ZbsExtension: StandardExtension;
+    type ZbkbExtension: StandardExtension;
     type WCHExtendedCompressedExtension: StandardExtension;
+    type WCHMemoryCopyExtension: StandardExtension;
 
     fn decode(addr: u64, bytes: &[u8]) -> DisResult<Instr<Self>> {
         use Error::*;
@@ -2600,6 +2778,28 @@ pub trait RiscVDisassembler: Sized + Copy + Clone {
                     }
 
                     // 0b100_00 RESERVED
+                    // This is reserved space in the risc-v spec, but WCH hijacked it
+                    0b100_00 if Self::WCHExtendedCompressedExtension::supported() => {
+                        // lbusp = inst & 0xf863 == 0x8000
+                        // sbsp = inst & 0xf863 == 0x8040
+                        // lhusp = inst & 0xf863 == 0x8020
+                        // shsp = inst & 0xf863 == 0x8060
+                        let halfword = inst.extract_bits(5, 1);
+                        let op = inst.extract_bits(6, 1);
+                        let rd_rs2 = IntReg::new(8 + inst.extract_bits(2, 3) as u32);
+
+                        let imm = if halfword == 0 {
+                            inst.extract_bits(7, 4)
+                        } else {
+                            inst.extract_bits(7, 1) << 4 | inst.extract_bits(8, 3) << 1
+                        } as i32;
+
+                        if op == 0 {
+                            Op::Load(LoadTypeInst::new(halfword as usize + 1, true, rd_rs2, IntReg::new(2), imm)?)
+                        } else {
+                            Op::Store(StoreTypeInst::new(halfword as usize + 1, rd_rs2, IntReg::new(2), imm)?)
+                        }
+                    }
                     0b100_01 => {
                         // MISC-ALU
                         let rd = 8 + inst.extract_bits(7, 3) as u32;
@@ -2686,25 +2886,6 @@ pub trait RiscVDisassembler: Sized + Copy + Clone {
                                 ))
                             }
                             _ => return Err(InvalidSubop),
-                        }
-                    }
-
-                    // This is reserved space in the risc-v spec, but WCH hijacked it
-                    0b100_11 if Self::WCHExtendedCompressedExtension::supported() => {
-                        let halfword = inst.extract_bits(5, 1);
-                        let op = inst.extract_bits(6, 1);
-                        let rd_rs2 = IntReg::new(8 + inst.extract_bits(2, 3) as u32);
-
-                        let imm = if halfword == 0 {
-                            inst.extract_bits(7, 4)
-                        } else {
-                            inst.extract_bits(7, 1) << 4 | inst.extract_bits(8, 3) << 1
-                        } as i32;
-
-                        if op == 0 {
-                            Op::Load(LoadTypeInst::new(halfword as usize + 1, true, rd_rs2, IntReg::new(2), imm)?)
-                        } else {
-                            Op::Store(StoreTypeInst::new(halfword as usize + 1, rd_rs2, IntReg::new(2), imm)?)
                         }
                     }
 
@@ -2834,10 +3015,14 @@ pub trait RiscVDisassembler: Sized + Copy + Clone {
                     0b00011 => {
                         // MISC-MEM
                         let itype = ITypeInst::new(inst)?;
-
+                        let wchrtype = WCHRTypeInst::new(inst)?;
+                        
                         match inst.funct3() {
                             0b000 => Op::Fence(itype),
                             0b001 => Op::FenceI(itype),
+                            // this is kind of an ugly approach, but it'll work.
+                            // by checking bits 25 and 26 are clear, this matches the mask-and-match from WCH's riscv opcodes table in their (closed) objdump fork
+                            0b111 if Self::WCHMemoryCopyExtension::supported() && inst.extract_bits(25, 2) == 0b00 => Op::Mcpy(wchrtype),
                             _ => return Err(InvalidSubop),
                         }
                     }
@@ -2849,17 +3034,53 @@ pub trait RiscVDisassembler: Sized + Copy + Clone {
                             0b010 => Op::SltI(itype),
                             0b011 => Op::SltIU(itype),
                             0b100 => Op::XorI(itype),
-                            0b110 => Op::OrI(itype),
+                            0b110 => Op::OrI(itype), // this also encodes prefetch, 
                             0b111 => Op::AndI(itype),
-                            0b001 => Op::SllI(itype), // TODO shamt
-                            0b101 => {
-                                if inst.0 & 0x40000000 == 0 {
-                                    Op::SrlI(itype)
-                                } else {
+                            0b001 => match inst.funct7() {
+                                0b0010100 if Self::ZbsExtension::supported() => Op::BsetI(itype),
+                                0b0010101 if Self::ZbsExtension::supported() && int_width > 4 => Op::BsetI(itype),
+                                0b0100100 if Self::ZbsExtension::supported() => Op::BclrI(itype),
+                                0b0100101 if Self::ZbsExtension::supported() && int_width > 4 => Op::BclrI(itype),
+                                0b0110100 if Self::ZbsExtension::supported() => Op::BinvI(itype),
+                                0b0110101 if Self::ZbsExtension::supported() && int_width > 4 => Op::BinvI(itype),
+                                0b0110000 if Self::ZbbExtension::supported() => 
+                                match (inst.0 >> 20) & 0x1f {
+                                    0b00000 => Op::Clz(itype),
+                                    0b00001 => Op::Ctz(itype),
+                                    0b00010 => Op::Cpop(itype),
+                                    0b00100 => Op::SextB(itype),
+                                    0b00101 => Op::SextH(itype),
+                                    // 0b11110 => Op::Zip(itype),
+                                    _ => return Err(InvalidSubop),
+                                },
+                                // TODO - this originally had "shamt" as the TODO and no funct7 match,
+                                // but there's other stuff packed in here. My read of the ISA spec is
+                                // that only funct7 == 0 should be slli
+                                0b0000000 => Op::SllI(itype),
+                                _ => return Err(InvalidSubop),
+                            }
+                            // this also encodes bexti, orc.b, rev8, revb, rori, unzip, brev
+                            0b101 => match inst.funct7() {
+                                0b0000000 => Op::SrlI(itype),
+                                0b0100000 => {
                                     // pretty terrible hack, whatever
                                     itype.inst.0 &= !0x40000000;
                                     Op::SraI(itype)
                                 }
+                                0b0100100 if Self::ZbsExtension::supported() => Op::BextI(itype),
+                                0b0100101 if Self::ZbsExtension::supported() && int_width > 4 => Op::BextI(itype),
+                                // 0b0010100 if Self::ZbsExtension::supported() =>
+                                // match (inst.0 >> 20) & 0x1f {
+                                //     0b00111 => Op::OrcB(itype),
+                                //     _ => return Err(InvalidSubop),
+                                // },
+                                // 0b0110100 if Self::ZbsExtension::supported() || Self::ZbkbExtension::supported() && int_width == 4 =>
+                                // match (inst.0 >> 20) & 0x1f {
+                                //     0b11000 => Op::Rev8(itype),
+                                //     _ => return Err(InvalidSubop),
+                                // }
+                                // // TODO: add 64-bit rev8 encoding
+                                _ => return Err(InvalidSubop),
                             }
                             _ => unreachable!(),
                         }
@@ -2872,6 +3093,7 @@ pub trait RiscVDisassembler: Sized + Copy + Clone {
                         let mut itype = ITypeInst::new(inst)?;
                         match inst.funct3() {
                             0b000 => Op::AddIW(itype),
+                            // 0b001 if Self::ZbaExtension::supported() && // todo: slli.uw
                             0b001 => Op::SllIW(itype), // TODO shamt
                             0b101 => {
                                 if inst.0 & 0x40000000 == 0 {
@@ -2939,6 +3161,7 @@ pub trait RiscVDisassembler: Sized + Copy + Clone {
                             0b0100000 => match inst.funct3() {
                                 0b000 => Op::Sub(rtype),
                                 0b101 => Op::Sra(rtype),
+                                0b111 if Self::ZbbExtension::supported() || Self::ZbkbExtension::supported() => Op::Andn(rtype),
                                 _ => return Err(InvalidSubop),
                             },
                             0b0000001 if Self::MulDivExtension::supported() => {
@@ -2954,6 +3177,53 @@ pub trait RiscVDisassembler: Sized + Copy + Clone {
                                     _ => unreachable!(),
                                 }
                             }
+                            0b0010000 if Self::ZbaExtension::supported() => {
+                                match inst.funct3() {
+                                    0b010 => Op::Sh1Add(rtype),
+                                    0b100 => Op::Sh2Add(rtype),
+                                    0b110 => Op::Sh3Add(rtype),
+                                    _ => return Err(InvalidSubop)
+                                }
+                            }
+                            0b0000100 if Self::ZbbExtension::supported() && int_width == 4 => {
+                                match inst.funct3() {
+                                    0b100 if inst.rs2() == 0 => Op::ZextH(rtype),
+                                    _ => return Err(InvalidSubop)
+                                }
+                            },
+                            0b0000101 if Self::ZbbExtension::supported() => {
+                                match inst.funct3() {
+                                    0b100 => Op::Min(rtype),
+                                    0b101 => Op::Minu(rtype),
+                                    0b110 => Op::Max(rtype),
+                                    0b111 => Op::Maxu(rtype),
+                                    _ => return Err(InvalidSubop)
+                                }
+                            },
+                            0b0010100 if Self::ZbsExtension::supported() => {
+                                match inst.funct3() {
+                                    // sha512sum0r or sha512sum1r 0b000
+                                    0b001 => Op::Bset(rtype),
+                                    // xperm.n 0b010
+                                    // xperm.b 0b100
+                                    // xperm 0b100
+                                    // xperm4 0b010
+                                    _ => return Err(InvalidSubop)
+                                }
+                            },
+                            0b0100100 if Self::ZbsExtension::supported() => {
+                                match inst.funct3() {
+                                    0b001 => Op::Bclr(rtype),
+                                    0b101 => Op::Bext(rtype),
+                                    _ => return Err(InvalidSubop)
+                                }
+                            },
+                            0b0110100 if Self::ZbsExtension::supported() => {
+                                match inst.funct3() {
+                                    0b001 => Op::Binv(rtype),
+                                    _ => return Err(InvalidSubop)
+                                }
+                            },
                             _ => return Err(InvalidSubop),
                         }
                     }
@@ -2982,7 +3252,23 @@ pub trait RiscVDisassembler: Sized + Copy + Clone {
                                     0b111 => Op::RemUW(rtype),
                                     _ => return Err(InvalidSubop),
                                 }
-                            }
+                            },
+                            // 0b0000100 if Self::ZbaExtension::supported() => {
+                            //     match inst.funct3() {
+                            //         // todo: special-case rs2==zero as zext.w
+                            //         0b000 => Op::AddUW(rtype),
+                            //         // todo: 0b100 w/ rs2==zero should be zext.h
+                            //         _ => return Err(InvalidSubop),
+                            //     }
+                            // },
+                            // 0b0010000 if Self::ZbaExtension::supported() => {
+                            //     match inst.funct3() {
+                            //         0b010 => Op::Sh1AddUW(rtype),
+                            //         0b100 => Op::Sh2AddUW(rtype),
+                            //         0b110 => Op::Sh3AddUW(rtype),
+                            //         _ => return Err(InvalidSubop),
+                            //     }
+                            // }
                             _ => return Err(InvalidSubop),
                         }
                     }
@@ -3236,8 +3522,14 @@ impl<RF: RegFile> RiscVDisassembler for RiscVIMACDisassembler<RF> {
     type RegFile = RF;
     type MulDivExtension = ExtensionSupported;
     type AtomicExtension = ExtensionSupported;
+    type ZbaExtension = ExtensionSupported;
+    type ZbbExtension = ExtensionSupported;
+    type ZbcExtension = ExtensionSupported;
+    type ZbsExtension = ExtensionSupported;
+    type ZbkbExtension = ExtensionNotImplemented;
     type CompressedExtension = ExtensionSupported;
     type WCHExtendedCompressedExtension = ExtensionSupported;
+    type WCHMemoryCopyExtension = ExtensionSupported;
 }
 
 #[derive(Copy, Clone, Debug)]
@@ -3246,6 +3538,12 @@ impl<RF: RegFile> RiscVDisassembler for RiscVIMACXWDisassembler<RF> {
     type RegFile = RF;
     type MulDivExtension = ExtensionSupported;
     type AtomicExtension = ExtensionSupported;
+    type ZbaExtension = ExtensionSupported;
+    type ZbbExtension = ExtensionSupported;
+    type ZbcExtension = ExtensionSupported;
+    type ZbsExtension = ExtensionSupported;
+    type ZbkbExtension = ExtensionNotImplemented;
     type CompressedExtension = ExtensionSupported;
     type WCHExtendedCompressedExtension = ExtensionSupported;
+    type WCHMemoryCopyExtension = ExtensionSupported;
 }

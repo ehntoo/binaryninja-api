@@ -78,6 +78,8 @@ enum Intrinsic {
     FcvtUToF(u8, u8, RoundMode),
     FcvtFToU(u8, u8, RoundMode),
     Fence,
+    // Mcpy(u8, u8, u8),
+    Mcpy,
 }
 
 #[derive(Copy, Clone)]
@@ -331,6 +333,7 @@ impl<D: RiscVDisassembler> RiscVIntrinsic<D> {
             Some((23, usize, fsize, rm)) => Some(Intrinsic::FcvtUToF(usize, fsize, rm).into()),
             Some((24, fsize, usize, rm)) => Some(Intrinsic::FcvtFToU(fsize, usize, rm).into()),
             Some((25, _, _, _)) => Some(Intrinsic::Fence.into()),
+            Some((26, _, _, _)) => Some(Intrinsic::Mcpy.into()),
             _ => None,
         }
     }
@@ -465,6 +468,7 @@ impl<D: RiscVDisassembler> architecture::Intrinsic for RiscVIntrinsic<D> {
             )
             .into(),
             Intrinsic::Fence => "_fence".into(),
+            Intrinsic::Mcpy => "__memcpy_u8".into(),
         }
     }
 
@@ -506,6 +510,7 @@ impl<D: RiscVDisassembler> architecture::Intrinsic for RiscVIntrinsic<D> {
                 Self::id_from_parts(24, Some(usize), Some(fsize), Some(rm))
             }
             Intrinsic::Fence => Self::id_from_parts(25, None, None, None),
+            Intrinsic::Mcpy => Self::id_from_parts(26, None, None, None),
         }
     }
 
@@ -573,6 +578,26 @@ impl<D: RiscVDisassembler> architecture::Intrinsic for RiscVIntrinsic<D> {
             Intrinsic::Fence => {
                 vec![NameAndType::new("", &Type::int(4, false), min_confidence())]
             }
+            Intrinsic::Mcpy => {
+                // TODO: These should be Type::pointer or Type::const_pointer
+                vec![
+                    NameAndType::new(
+                        "dst",
+                        &Type::int(<D::RegFile as RegFile>::Int::width(), false),
+                        min_confidence(),
+                    ),
+                    NameAndType::new(
+                        "src",
+                        &Type::int(<D::RegFile as RegFile>::Int::width(), false),
+                        min_confidence(),
+                    ),
+                    NameAndType::new(
+                        "count",
+                        &Type::int(<D::RegFile as RegFile>::Int::width(), false),
+                        min_confidence(),
+                    ),
+                ]
+            }
         }
     }
 
@@ -615,6 +640,18 @@ impl<D: RiscVDisassembler> architecture::Intrinsic for RiscVIntrinsic<D> {
             }
             Intrinsic::FcvtFToU(_, size, _) => {
                 vec![Conf::new(Type::int(size as usize, false), max_confidence())]
+            }
+            Intrinsic::Mcpy => {
+                vec![
+                    Conf::new(
+                        Type::int(<D::RegFile as RegFile>::Int::width(), false),
+                        min_confidence(),
+                    ),
+                    Conf::new(
+                        Type::int(<D::RegFile as RegFile>::Int::width(), false),
+                        min_confidence(),
+                    ),
+                ]
             }
         }
     }
@@ -708,6 +745,12 @@ impl<D: 'static + RiscVDisassembler + Send + Sync> architecture::Architecture fo
                     };
 
                     res.add_branch(branch_type, None);
+                    // } else if i.rd().id() == 1 {
+                    //     res.add_branch(BranchInfo::Unresolved, None);
+                    //     // res.add_branch(BranchInfo::False(addr.wrapping_add(inst_len as u64)), None);
+                    // } else {
+                    //     res.add_branch(BranchInfo::Unresolved, None);
+                    // res.add_branch(BranchInfo::False(addr.wrapping_add(inst_len as u64)), None);
                 }
             }
             Op::Beq(ref b)
@@ -1334,6 +1377,20 @@ impl<D: 'static + RiscVDisassembler + Send + Sync> architecture::Architecture fo
                 )
                 .append(),
 
+            Op::Mcpy(r) => {
+                let rd = Register::from(r.rd());
+                let rs1 = Register::from(r.rs1());
+                let rs2 = Register::from(r.rs2());
+                let count_expr = il.sub(4, rs1, rs2).build();
+                il.intrinsic(
+                    [rd, rs2],
+                    Intrinsic::Mcpy,
+                    [il.reg(4, rd), il.reg(4, rs2), count_expr],
+                )
+                .append();
+                // todo: update dst and src registers
+            }
+
             Op::Csrrw(i) => {
                 let rd = Register::from(i.rd());
                 let rs1 = Liftable::lift(il, Register::from(i.rs1()));
@@ -1828,7 +1885,127 @@ impl<D: 'static + RiscVDisassembler + Send + Sync> architecture::Architecture fo
                 il.intrinsic([rd], Intrinsic::Fclass(f.width()), [il.reg(width, rs1)])
                     .append();
             }
+            Op::ZextH(r) => {
+                let rd = Register::from(r.rd());
+                let rs1 = Register::from(r.rs1());
+                il.set_reg(max_width, rd, il.zx(2, rs1)).append();
+            }
+            Op::Sh1Add(r) => simple_r!(r, |rs1, rs2| il.add(
+                max_width,
+                rs2,
+                il.lsl(max_width, rs1, il.const_int(max_width, 1))
+            )),
+            Op::Sh2Add(r) => simple_r!(r, |rs1, rs2| il.add(
+                max_width,
+                rs2,
+                il.lsl(max_width, rs1, il.const_int(max_width, 2))
+            )),
+            Op::Sh3Add(r) => simple_r!(r, |rs1, rs2| il.add(
+                max_width,
+                rs2,
+                il.lsl(max_width, rs1, il.const_int(max_width, 3))
+            )),
+            Op::Andn(r) => simple_r!(r, |rs1, rs2| il.and(max_width, rs1, il.not(max_width, rs2))),
+            Op::Bset(r) => simple_r!(r, |rs1, rs2| il.or(
+                max_width,
+                rs1,
+                il.lsl(
+                    max_width,
+                    il.const_int(max_width, 1),
+                    il.and(
+                        max_width,
+                        rs2,
+                        il.const_int(max_width, ((8 * max_width) - 1).try_into().unwrap())
+                    )
+                )
+            )),
+            Op::Bext(r) => simple_r!(r, |rs1, rs2| il.and(
+                max_width,
+                il.const_int(max_width, 1),
+                il.lsr(
+                    max_width,
+                    rs1,
+                    il.and(
+                        max_width,
+                        rs2,
+                        il.const_int(max_width, ((8 * max_width) - 1).try_into().unwrap())
+                    )
+                )
+            )),
+            Op::Bclr(r) => simple_r!(r, |rs1, rs2| il.and(
+                max_width,
+                rs1,
+                il.not(
+                    max_width,
+                    il.lsl(
+                        max_width,
+                        il.const_int(max_width, 1),
+                        il.and(
+                            max_width,
+                            rs2,
+                            il.const_int(max_width, ((8 * max_width) - 1).try_into().unwrap())
+                        )
+                    )
+                )
+            )),
+            Op::Max(r) | Op::Maxu(r) | Op::Min(r) | Op::Minu(r) => {
+                let rd = Register::from(r.rd());
+                let rs1 = Register::from(r.rs1());
+                let rs2 = Register::from(r.rs2());
 
+                let mut t = Label::new();
+                let mut f = Label::new();
+                let mut done = Label::new();
+
+                let cmp = match op {
+                    Op::Max(..) => il.cmp_sgt(max_width, rs1, rs2),
+                    Op::Maxu(..) => il.cmp_ugt(max_width, rs1, rs2),
+                    Op::Min(..) => il.cmp_slt(max_width, rs1, rs2),
+                    Op::Minu(..) => il.cmp_ult(max_width, rs1, rs2),
+                    _ => return None,
+                };
+
+                il.if_expr(cmp, &t, &f).append();
+
+                il.mark_label(&mut t);
+                il.set_reg(max_width, rd, rs1).append();
+                il.goto(&done).append();
+
+                il.mark_label(&mut f);
+                il.set_reg(max_width, rd, rs2).append();
+
+                il.mark_label(&mut done);
+            }
+            Op::BsetI(i) => simple_i!(i, |rs1, imm| il.or(
+                max_width,
+                rs1,
+                1 << (imm as usize & ((max_width * 8) - 1))
+            )),
+            Op::BclrI(i) => simple_i!(i, |rs1, imm| il.and(
+                max_width,
+                rs1,
+                il.not(max_width, 1 << (imm as usize & ((max_width * 8) - 1)))
+            )),
+            Op::BinvI(i) => simple_i!(i, |rs1, imm| il.xor(
+                max_width,
+                rs1,
+                1 << (imm as usize & ((max_width * 8) - 1))
+            )),
+            Op::BextI(i) => simple_i!(i, |rs1, imm| il.and(
+                max_width,
+                il.lsr(
+                    max_width,
+                    rs1,
+                    il.const_int(
+                        max_width,
+                        (imm as usize & ((max_width * 8) - 1)).try_into().unwrap()
+                    )
+                ),
+                1
+            )),
+            Op::SextB(i) => simple_i!(i, |rs1, _| il.sx(max_width, il.reg(1, rs1))),
+            Op::SextH(i) => simple_i!(i, |rs1, _| il.sx(max_width, il.reg(2, rs1))),
+            // Op::Clz(i) => simple_i!(i, |rs1, _| il.clz(max_width, rs1)),
             _ => il.unimplemented().append(),
         };
 
